@@ -1,0 +1,29 @@
+{
+  "peliculas": [
+    {
+      "id": 1,
+      "titulo": "El Padrino",
+      "director": "Francis Ford Coppola",
+      "anio": 1972,
+      "genero": "Drama",
+      "disponible": true
+    },
+    {
+      "id": 2,
+      "titulo": "Inception",
+      "director": "Christopher Nolan",
+      "anio": 2010,
+      "genero": "Ciencia ficción",
+      "disponible": true
+    },
+    {
+      "id": 3,
+      "titulo": "Toy Story",
+      "director": "John Lasseter",
+      "anio": 1995,
+      "genero": "Animación",
+      "disponible": true
+    }
+  ],
+  "nextId": 4
+}
