@@ -1,241 +1,185 @@
-import express from "express";
-import { Sequelize, DataTypes } from "sequelize";
-import jwt from "jsonwebtoken";
+const express = require("express");
+const Database = require("better-sqlite3");
+const path = require("path");
 
-// ---------- Configuración de la base de datos SQLite ----------
-const sequelize = new Sequelize({
-  dialect: "sqlite",
-  storage: "./database.sqlite",
-  logging: false,
-});
-
-// ---------- Definición del modelo Pelicula ----------
-const Pelicula = sequelize.define("Pelicula", {
-  titulo: {
-    type: DataTypes.STRING,
-    allowNull: false,
-  },
-  anio: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-  },
-  genero: {
-    type: DataTypes.STRING,
-  },
-  director: {
-    type: DataTypes.STRING,
-  },
-  calificacion: {
-    type: DataTypes.FLOAT,
-    defaultValue: 0,
-  },
-});
-
-// ---------- Creación de la aplicación Express ----------
+// Inicializar Express
 const app = express();
-app.use(express.json()); // Para parsear JSON
-app.use(express.urlencoded({ extended: true })); // Opcional, para formularios
+const PORT = process.env.PORT || 3000;
 
-// ---------- Middleware Logger (de la guía) ----------
-app.use((req, res, next) => {
-  console.log(`[${new Date().toLocaleString()}] ${req.method} ${req.url}`);
-  next();
-});
+// Middleware para JSON
+app.use(express.json());
 
-// ---------- Clave secreta para JWT (en producción usar variable de entorno) ----------
-const SECRET_KEY = "mi_clave_secreta_super_segura";
+// Conectar a la base de datos (se crea el archivo peliculas.db)
+const db = new Database(path.join(__dirname, "peliculas.db"));
 
-// ---------- Función para sincronizar BD y cargar datos de ejemplo ----------
-async function iniciarBD() {
-  // force: true borra y recrea la tabla (solo desarrollo). En producción usar false o migraciones.
-  await sequelize.sync({ force: true });
-  await Pelicula.bulkCreate([
-    {
-      titulo: "El Padrino",
-      anio: 1972,
-      genero: "Drama",
-      director: "Francis Ford Coppola",
-      calificacion: 9.2,
-    },
-    {
-      titulo: "Interestelar",
-      anio: 2014,
-      genero: "Ciencia ficción",
-      director: "Christopher Nolan",
-      calificacion: 8.6,
-    },
-    {
-      titulo: "Pulp Fiction",
-      anio: 1994,
-      genero: "Crimen",
-      director: "Quentin Tarantino",
-      calificacion: 8.9,
-    },
-  ]);
-  console.log("✅ Base de datos sincronizada y datos de ejemplo cargados");
+// Crear tabla de películas si no existe
+db.exec(`
+  CREATE TABLE IF NOT EXISTS peliculas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    titulo TEXT NOT NULL,
+    director TEXT NOT NULL,
+    anio INTEGER,
+    genero TEXT,
+    disponible BOOLEAN DEFAULT 1
+  )
+`);
+
+// Insertar datos de ejemplo si la tabla está vacía
+const count = db.prepare("SELECT COUNT(*) as total FROM peliculas").get();
+if (count.total === 0) {
+  const insert = db.prepare(`
+    INSERT INTO peliculas (titulo, director, anio, genero, disponible)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  insert.run("El Padrino", "Francis Ford Coppola", 1972, "Drama", 1);
+  insert.run("Inception", "Christopher Nolan", 2010, "Ciencia ficción", 1);
+  insert.run("Toy Story", "John Lasseter", 1995, "Animación", 1);
+  console.log("✅ Datos de ejemplo insertados");
 }
 
-// ========== 1. RUTA PÚBLICA: LOGIN (genera JWT) ==========
-app.post("/login", (req, res) => {
-  const { username, password } = req.body;
-  // Simulación de validación (en producción usar bcrypt y consultar BD)
-  if (username === "admin" && password === "1234") {
-    const user = { id: 1, username: "admin" };
-    const token = jwt.sign(user, SECRET_KEY, { expiresIn: "2h" });
-    res.json({ mensaje: "Login exitoso", token });
-  } else {
-    res.status(401).json({ error: "Credenciales inválidas" });
-  }
-});
+// ========== RUTAS ==========
 
-// ========== 2. MIDDLEWARE DE VERIFICACIÓN DE TOKEN ==========
-const verificarToken = (req, res, next) => {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1]; // Formato "Bearer TOKEN"
-  if (!token) {
-    return res.status(401).json({ error: "Token requerido" });
-  }
-  jwt.verify(token, SECRET_KEY, (err, decoded) => {
-    if (err) {
-      return res.status(403).json({ error: "Token inválido o expirado" });
-    }
-    req.user = decoded; // Guardamos datos del usuario (por si se necesitan en rutas)
-    next();
-  });
-};
-
-// ========== 3. RUTAS PROTEGIDAS (CRUD completo de películas) ==========
-// Todas estas requieren el token JWT
-
-// GET todas las películas
-app.get("/peliculas", verificarToken, async (req, res, next) => {
+// GET - Obtener todas las películas
+app.get("/peliculas", (req, res) => {
   try {
-    const peliculas = await Pelicula.findAll();
-    res.json(peliculas);
+    const peliculas = db.prepare("SELECT * FROM peliculas").all();
+    res.json({ exito: true, data: peliculas });
   } catch (error) {
-    next(error);
+    res.status(500).json({ exito: false, mensaje: error.message });
   }
 });
 
-// GET una película por ID
-app.get("/peliculas/:id", verificarToken, async (req, res, next) => {
+// GET - Obtener una película por ID
+app.get("/peliculas/:id", (req, res) => {
   try {
-    const pelicula = await Pelicula.findByPk(req.params.id);
-    if (pelicula) {
-      res.json(pelicula);
-    } else {
-      res.status(404).json({ error: "Película no encontrada" });
-    }
-  } catch (error) {
-    next(error);
-  }
-});
-
-// POST crear nueva película
-app.post("/peliculas", verificarToken, async (req, res, next) => {
-  try {
-    const nueva = await Pelicula.create(req.body);
-    res.status(201).json(nueva);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// PUT actualizar película existente
-app.put("/peliculas/:id", verificarToken, async (req, res, next) => {
-  try {
-    const pelicula = await Pelicula.findByPk(req.params.id);
+    const id = req.params.id;
+    const pelicula = db.prepare("SELECT * FROM peliculas WHERE id = ?").get(id);
     if (!pelicula) {
-      return res.status(404).json({ error: "Película no encontrada" });
+      return res
+        .status(404)
+        .json({ exito: false, mensaje: "Película no encontrada" });
     }
-    await pelicula.update(req.body);
-    res.json(pelicula);
+    res.json({ exito: true, data: pelicula });
   } catch (error) {
-    next(error);
+    res.status(500).json({ exito: false, mensaje: error.message });
   }
 });
 
-// DELETE eliminar película
-app.delete("/peliculas/:id", verificarToken, async (req, res, next) => {
+// POST - Crear una nueva película
+app.post("/peliculas", (req, res) => {
   try {
-    const borrados = await Pelicula.destroy({
-      where: { id: req.params.id },
-    });
-    if (borrados) {
-      res.json({ mensaje: "Película eliminada correctamente" });
-    } else {
-      res.status(404).json({ error: "Película no encontrada" });
-    }
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ========== 4. CONSULTAS ADICIONALES (también protegidas) ==========
-
-// Película con mayor calificación
-app.get(
-  "/peliculas/estadisticas/mejor",
-  verificarToken,
-  async (req, res, next) => {
-    try {
-      const mejor = await Pelicula.findOne({
-        order: [["calificacion", "DESC"]],
+    const { titulo, director, anio, genero, disponible } = req.body;
+    if (!titulo || !director) {
+      return res.status(400).json({
+        exito: false,
+        mensaje: "Faltan campos: titulo y director son obligatorios",
       });
-      res.json(mejor);
-    } catch (error) {
-      next(error);
     }
-  },
-);
-
-// Película con menor calificación
-app.get(
-  "/peliculas/estadisticas/peor",
-  verificarToken,
-  async (req, res, next) => {
-    try {
-      const peor = await Pelicula.findOne({ order: [["calificacion", "ASC"]] });
-      res.json(peor);
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-// Filtrar por género
-app.get("/peliculas/genero/:nombre", verificarToken, async (req, res, next) => {
-  try {
-    const peliculas = await Pelicula.findAll({
-      where: { genero: req.params.nombre },
-    });
-    res.json(peliculas);
+    const insert = db.prepare(`
+      INSERT INTO peliculas (titulo, director, anio, genero, disponible)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    const info = insert.run(
+      titulo,
+      director,
+      anio || null,
+      genero || null,
+      disponible !== undefined ? disponible : 1,
+    );
+    const nueva = db
+      .prepare("SELECT * FROM peliculas WHERE id = ?")
+      .get(info.lastInsertRowid);
+    res.status(201).json({ exito: true, data: nueva });
   } catch (error) {
-    next(error);
+    res.status(500).json({ exito: false, mensaje: error.message });
   }
 });
 
-// Ordenar por año ascendente
-app.get("/peliculas/orden/anio", verificarToken, async (req, res, next) => {
+// PUT - Actualizar una película (parcial o completamente)
+app.put("/peliculas/:id", (req, res) => {
   try {
-    const peliculas = await Pelicula.findAll({
-      order: [["anio", "ASC"]],
-    });
-    res.json(peliculas);
+    const id = req.params.id;
+    const { titulo, director, anio, genero, disponible } = req.body;
+
+    const existe = db.prepare("SELECT id FROM peliculas WHERE id = ?").get(id);
+    if (!existe) {
+      return res
+        .status(404)
+        .json({ exito: false, mensaje: "Película no encontrada" });
+    }
+
+    const updates = [];
+    const valores = [];
+    if (titulo !== undefined) {
+      updates.push("titulo = ?");
+      valores.push(titulo);
+    }
+    if (director !== undefined) {
+      updates.push("director = ?");
+      valores.push(director);
+    }
+    if (anio !== undefined) {
+      updates.push("anio = ?");
+      valores.push(anio);
+    }
+    if (genero !== undefined) {
+      updates.push("genero = ?");
+      valores.push(genero);
+    }
+    if (disponible !== undefined) {
+      updates.push("disponible = ?");
+      valores.push(disponible);
+    }
+
+    if (updates.length === 0) {
+      return res
+        .status(400)
+        .json({ exito: false, mensaje: "No hay datos para actualizar" });
+    }
+    valores.push(id);
+    const updateStmt = db.prepare(
+      `UPDATE peliculas SET ${updates.join(", ")} WHERE id = ?`,
+    );
+    updateStmt.run(...valores);
+
+    const actualizada = db
+      .prepare("SELECT * FROM peliculas WHERE id = ?")
+      .get(id);
+    res.json({ exito: true, data: actualizada });
   } catch (error) {
-    next(error);
+    res.status(500).json({ exito: false, mensaje: error.message });
   }
 });
 
-// ========== 5. MIDDLEWARE DE MANEJO DE ERRORES (global) ==========
-app.use((err, req, res, next) => {
-  console.error("❌ Error:", err);
-  res.status(500).json({ error: "Error interno del servidor" });
+// DELETE - Eliminar una película
+app.delete("/peliculas/:id", (req, res) => {
+  try {
+    const id = req.params.id;
+    const existe = db.prepare("SELECT * FROM peliculas WHERE id = ?").get(id);
+    if (!existe) {
+      return res
+        .status(404)
+        .json({ exito: false, mensaje: "Película no encontrada" });
+    }
+    db.prepare("DELETE FROM peliculas WHERE id = ?").run(id);
+    res.json({ exito: true, mensaje: "Película eliminada", data: existe });
+  } catch (error) {
+    res.status(500).json({ exito: false, mensaje: error.message });
+  }
 });
 
-// ========== 6. INICIAR SERVIDOR ==========
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
-  console.log(`🚀 Servidor JWT corriendo en http://localhost:${PORT}`);
-  await iniciarBD();
+// Ruta raíz
+app.get("/", (req, res) => {
+  res.send("🎬 API de Películas funcionando. Usa /peliculas");
+});
+
+// Iniciar servidor
+app.listen(PORT, () => {
+  console.log(`Servidor corriendo en http://localhost:${PORT}`);
+  console.log(`Endpoints:`);
+  console.log(`  GET    /peliculas`);
+  console.log(`  GET    /peliculas/:id`);
+  console.log(`  POST   /peliculas`);
+  console.log(`  PUT    /peliculas/:id`);
+  console.log(`  DELETE /peliculas/:id`);
 });
